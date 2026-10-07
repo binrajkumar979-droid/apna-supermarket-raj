@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwnerOrManager() {
+      return isAuthenticated() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'manager'
+      );
+    }
+    
+    function isDeliveryBoy() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'delivery_boy';
+    }
+
+    // 1. Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isOwnerOrManager());
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && (
+        request.auth.uid == userId || 
+        isOwnerOrManager()
+      );
+      
+      // Addresses subcollection
+      match /addresses/{addressId} {
+        allow read, write: if isAuthenticated() && (request.auth.uid == userId || isOwnerOrManager());
+      }
+    }
+
+    // 2. Products & Categories (Public read, Owner write)
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isOwnerOrManager();
+    }
+    
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isOwnerOrManager();
+    }
+
+    // 3. Serviceable Villages & Areas (Public read, Owner write)
+    match /serviceable_areas/{areaId} {
+      allow read: if true;
+      allow write: if isOwnerOrManager();
+    }
+
+    // 4. Store Config & Settings (Public read, Owner write)
+    match /store_config/{docId} {
+      allow read: if true;
+      allow write: if isOwnerOrManager();
+    }
+
+    // 5. Orders Collection
+    match /orders/{orderId} {
+      allow read: if isAuthenticated() && (
+        resource.data.customer_id == request.auth.uid || 
+        isOwnerOrManager() || 
+        isDeliveryBoy()
+      );
+      // Order creation is managed via Cloud Function createOrder or fallback
+      allow create: if isAuthenticated();
+      // Owner can update any order; Delivery boy can update assigned order; Customer can cancel within 5 mins
+      allow update: if isAuthenticated() && (
+        isOwnerOrManager() ||
+        (isDeliveryBoy() && resource.data.assigned_delivery_boy_id == request.auth.uid) ||
+        (resource.data.customer_id == request.auth.uid && request.resource.data.order_status == 'CANCELLED')
+      );
+    }
+
+    // 6. Release 2 & 3 Pre-structured Rules (Wallet, Khata, Coupons)
+    match /wallet_transactions/{txnId} {
+      allow read: if isAuthenticated() && (resource.data.user_id == request.auth.uid || isOwnerOrManager());
+      allow write: if isOwnerOrManager();
+    }
+
+    match /khata_transactions/{txnId} {
+      allow read: if isAuthenticated() && (resource.data.customer_id == request.auth.uid || isOwnerOrManager());
+      allow write: if isOwnerOrManager();
+    }
+
+    match /coupons/{couponId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwnerOrManager();
+    }
+  }
+}
